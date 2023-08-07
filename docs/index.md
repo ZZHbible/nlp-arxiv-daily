@@ -1,14 +1,5 @@
----
-layout: default
----
-
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
 
 ## Updated on 2023.08.07
-> Usage instructions: [here](./docs/README.md#usage)
 
 <details>
   <summary>Table of Contents</summary>
