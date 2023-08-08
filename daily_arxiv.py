@@ -1,20 +1,30 @@
 import os
 import re
 import json
+from collections import defaultdict
+
 import arxiv
 import yaml
 import logging
 import argparse
 import datetime
 import requests
+from langchain import OpenAI, LLMChain, PromptTemplate
+import dotenv
+dotenv.load_dotenv()
 
 logging.basicConfig(format='[%(asctime)s %(levelname)s] %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
 
+
 base_url = "https://arxiv.paperswithcode.com/api/v0/papers/"
 github_url = "https://api.github.com/search/repositories"
 arxiv_url = "http://arxiv.org/"
+diff_dict = defaultdict(list)
+headers={
+    "Content-Type":"application/json"
+}
 
 def load_config(config_file:str) -> dict:
     '''
@@ -60,8 +70,25 @@ def sort_papers(papers):
     keys.sort(reverse=True)
     for key in keys:
         output[key] = papers[key]
-    return output    
-import requests
+    return output
+
+def get_arxiv_result(result):
+    ret={
+        "paper_id" : result.get_short_id(),
+        "paper_title" : result.title,
+        "paper_url" : result.entry_id,
+        "code_url" : base_url + result.get_short_id(),  # TODO
+        "paper_abstract" : result.summary.replace("\n", " "),
+        "paper_authors" : get_authors(result.authors),
+        "paper_first_author" : get_authors(result.authors, first_author=True),
+        # "primary_category": result.primary_category,
+        "publish_time": result.published.date(),
+        "update_time": result.updated.date(),
+        "comments" : result.comment
+    }
+    return ret
+
+
 
 def get_code_link(qword:str) -> str:
     """
@@ -101,31 +128,21 @@ def get_daily_papers(topic,query="slam", max_results=2):
 
     for result in search_engine.results():
 
-        paper_id            = result.get_short_id()
-        paper_title         = result.title
-        paper_url           = result.entry_id
-        code_url            = base_url + paper_id #TODO
-        paper_abstract      = result.summary.replace("\n"," ")
-        paper_authors       = get_authors(result.authors)
-        paper_first_author  = get_authors(result.authors,first_author = True)
-        primary_category    = result.primary_category
-        publish_time        = result.published.date()
-        update_time         = result.updated.date()
-        comments            = result.comment
+        ret=get_arxiv_result(result)
 
-        logging.info(f"Time = {update_time} title = {paper_title} author = {paper_first_author}")
+        logging.info(f"Time = {ret['update_time']} title = {ret['paper_title']} author = {ret['paper_first_author']}")
 
         # eg: 2108.09112v1 -> 2108.09112
-        ver_pos = paper_id.find('v')
+        ver_pos = ret["paper_id"].find('v')
         if ver_pos == -1:
-            paper_key = paper_id
+            paper_key = ret["paper_id"]
         else:
-            paper_key = paper_id[0:ver_pos]    
+            paper_key = ret["paper_id"][0:ver_pos]
         paper_url = arxiv_url + 'abs/' + paper_key
         
         try:
             # source code link    
-            r = requests.get(code_url).json()
+            r = requests.get(ret["code_url"]).json()
             repo_url = None
             if "official" in r and r["official"]:
                 repo_url = r["official"]["url"]
@@ -136,15 +153,15 @@ def get_daily_papers(topic,query="slam", max_results=2):
             #        repo_url = get_code_link(paper_key)
             if repo_url is not None:
                 content[paper_key] = "|**{}**|**{}**|{} et.al.|[{}]({})|**[link]({})**|\n".format(
-                       update_time,paper_title,paper_first_author,paper_key,paper_url,repo_url)
+                       ret["update_time"],ret["paper_title"],ret["paper_first_author"],paper_key,paper_url,repo_url)
                 content_to_web[paper_key] = "- {}, **{}**, {} et.al., Paper: [{}]({}), Code: **[{}]({})**".format(
-                       update_time,paper_title,paper_first_author,paper_url,paper_url,repo_url,repo_url)
+                    ret["update_time"], ret["paper_title"], ret["paper_first_author"],paper_url,paper_url,repo_url,repo_url)
 
             else:
                 content[paper_key] = "|**{}**|**{}**|{} et.al.|[{}]({})|null|\n".format(
-                       update_time,paper_title,paper_first_author,paper_key,paper_url)
+                       ret["update_time"],ret["paper_title"],ret["paper_first_author"],paper_key,paper_url)
                 content_to_web[paper_key] = "- {}, **{}**, {} et.al., Paper: [{}]({})".format(
-                       update_time,paper_title,paper_first_author,paper_url,paper_url)
+                       ret["update_time"],ret["paper_title"],ret["paper_first_author"],paper_url,paper_url)
 
             # TODO: select useful comments
             comments = None
@@ -218,19 +235,24 @@ def update_json_file(filename,data_dict):
     '''
     daily update json file using data_dict
     '''
+
     with open(filename,"r") as f:
         content = f.read()
         if not content:
             m = {}
         else:
             m = json.loads(content)
-            
-    json_data = m.copy() 
+    json_data = defaultdict(dict)
+    json_data.update(m.copy())
+
+    # json_data = m.copy()
     
     # update papers in each keywords         
     for data in data_dict:
         for keyword in data.keys():
             papers = data[keyword]
+            # 找出在dict1中存在而在dict2中不存在的键值对
+            diff_dict.update({keyword :[key for key in papers if key not in json_data[keyword]]})
 
             if keyword in json_data.keys():
                 json_data[keyword].update(papers)
@@ -286,22 +308,19 @@ def json_to_md(filename,md_filename,
 
         if (use_title == True) and (to_web == True):
             f.write("---\n" + "layout: default\n" + "---\n\n")
-        
-        if show_badge == True:
-            f.write(f"[![Contributors][contributors-shield]][contributors-url]\n")
-            f.write(f"[![Forks][forks-shield]][forks-url]\n")
-            f.write(f"[![Stargazers][stars-shield]][stars-url]\n")
-            f.write(f"[![Issues][issues-shield]][issues-url]\n\n")    
-                
+
+        f.write("## 创建.env文件\n"
+                "文件中包含OPENAI_API_KEY和Webhook两个字段，用于调用openai和钉钉机器人\n")
+        markdown_content= '''
+        bash run.sh
+        '''
+        f.write(markdown_content+'\n')
         if use_title == True:
             #f.write(("<p align="center"><h1 align="center"><br><ins>CV-ARXIV-DAILY"
             #         "</ins><br>Automatically Update CV Papers Daily</h1></p>\n"))
             f.write("## Updated on " + DateNow + "\n")
         else:
             f.write("> Updated on " + DateNow + "\n")
-
-        # TODO: add usage
-        f.write("> Usage instructions: [here](./docs/README.md#usage)\n\n")
 
         #Add: table of contents
         if use_tc == True:
@@ -346,24 +365,6 @@ def json_to_md(filename,md_filename,
                 top_info = top_info.replace(' ','-').replace('.','')
                 f.write(f"<p align=right>(<a href={top_info.lower()}>back to top</a>)</p>\n\n")
 
-        # if show_badge == True:
-        #     # we don't like long string, break it!
-        #     f.write((f"[contributors-shield]: https://img.shields.io/github/"
-        #              f"contributors/Vincentqyw/cv-arxiv-daily.svg?style=for-the-badge\n"))
-        #     f.write((f"[contributors-url]: https://github.com/Vincentqyw/"
-        #              f"cv-arxiv-daily/graphs/contributors\n"))
-        #     f.write((f"[forks-shield]: https://img.shields.io/github/forks/Vincentqyw/"
-        #              f"cv-arxiv-daily.svg?style=for-the-badge\n"))
-        #     f.write((f"[forks-url]: https://github.com/Vincentqyw/"
-        #              f"cv-arxiv-daily/network/members\n"))
-        #     f.write((f"[stars-shield]: https://img.shields.io/github/stars/Vincentqyw/"
-        #              f"cv-arxiv-daily.svg?style=for-the-badge\n"))
-        #     f.write((f"[stars-url]: https://github.com/Vincentqyw/"
-        #              f"cv-arxiv-daily/stargazers\n"))
-        #     f.write((f"[issues-shield]: https://img.shields.io/github/issues/Vincentqyw/"
-        #              f"cv-arxiv-daily.svg?style=for-the-badge\n"))
-        #     f.write((f"[issues-url]: https://github.com/Vincentqyw/"
-        #              f"cv-arxiv-daily/issues\n\n"))
                 
     logging.info(f"{task} finished")        
 
@@ -413,7 +414,7 @@ def demo(**config):
         # TODO: duplicated update paper links!!!
         if config['update_paper_links']:
             update_paper_links(json_file)
-        else:    
+        else:
             update_json_file(json_file,data_collector)
         json_to_md(json_file, md_file, task ='Update GitPage', \
             to_web = True, show_badge = show_badge, \
@@ -431,6 +432,39 @@ def demo(**config):
         json_to_md(json_file, md_file, task ='Update Wechat', \
             to_web=False, use_title= False, show_badge = show_badge)
 
+    # openai
+    llm = OpenAI(model_name="gpt-3.5-turbo",
+                 temperature=0,
+                 # openai_proxy="http://127.0.0.1:8889"
+                 )
+    keyword_template = """请翻译下述文本为中文："{query}"\n翻译内容为： """
+    keyword_prompt = PromptTemplate(input_variables=["query"], template=keyword_template)
+    chain = LLMChain(llm=llm, prompt=keyword_prompt)
+    for keyword in keywords:
+        if not diff_dict[keyword]: continue
+        search_engine=arxiv.Search(id_list=diff_dict[keyword])
+        for result in search_engine.results():
+            paper = get_arxiv_result(result)
+            try:
+                paper['paper_abstract'] = chain(paper['paper_abstract'])['text']
+                print(paper)
+                print('*'*20)
+                message = {
+                    "msgtype": "markdown",
+                    "markdown": {
+                        "title": keyword+"最新论文",
+                        "text": f"#### {paper['paper_title']} \n > {paper['paper_abstract']}\n > ###### {paper['publish_time']} {paper['comments']} [paper_url]({paper['paper_url']}) \n"
+                    },
+                }
+
+                response = requests.post(os.environ['Webhook'], headers=headers, data=json.dumps(message))
+
+                print(response.json())
+            except:
+                print(f"error {paper['paper_title']}")
+
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_path',type=str, default='config.yaml',
@@ -441,3 +475,4 @@ if __name__ == "__main__":
     config = load_config(args.config_path)
     config = {**config, 'update_paper_links':args.update_paper_links}
     demo(**config)
+    print(diff_dict)

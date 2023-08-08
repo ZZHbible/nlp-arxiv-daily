@@ -1,0 +1,1 @@
+0 10 * * * python /path/to/your/daily_arxiv.py
