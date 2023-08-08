@@ -1,1 +1,1 @@
-0 10 * * * python /path/to/your/daily_arxiv.py
+echo "0 10 * * * python path/to/nlp-arxiv-daily/daily_arxiv.py" | crontab -
