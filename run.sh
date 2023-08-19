@@ -1,1 +1,1 @@
-echo "0 10 * * * python path/to/nlp-arxiv-daily/daily_arxiv.py" | crontab -
+echo "0 10 * * * bash temp.sh" | crontab -
